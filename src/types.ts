@@ -20,12 +20,12 @@ export interface Lift {
 
 export interface RouteStep {
   id: number;
-  name: string | null; // Name can be null for connectors
-  type: "lift" | "trail";
+  name: string; // Updated to match API response
+  type: "lift" | "trail" | "intersection"; // Added intersection type
   start_point_id: number;
   end_point_id: number;
   estimated_time_minutes: number;
-  difficulty: string | null; // Can be null for lifts/connectors
+  difficulty: "green" | "blue" | "black" | "blue_black" | "double_black"; // Updated to match API
   start_coords: {
     lat: number;
     lng: number;

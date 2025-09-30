@@ -1,19 +1,36 @@
 {
   "expo": {
-    "name": "ski-finder-mobile",
+    "name": "Ski Finder",
     "slug": "ski-finder-mobile",
-    "version": "1.0.0",
+    "version": "1.0.3",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "dark",
     "newArchEnabled": true,
+    "extra": {
+      "apiUrl": {
+        "development": "http://localhost:3001/api/v1",
+        "production": "https://ski-route-api.onrender.com/api/v1"
+      },
+      "environment": "development",
+      "eas": {
+        "projectId": "4dad12bd-3ff8-4258-a3fe-c3d975a5c5cd"
+      }
+    },
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.quinnsweeney11.skifinder",
+      "buildNumber": "4",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false,
+        "UIBackgroundModes": ["background-fetch"]
+      },
+      "associatedDomains": ["applinks:ski-route-api.onrender.com"]
     },
     "android": {
       "adaptiveIcon": {
@@ -21,10 +38,12 @@
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "package": "com.quinnsweeney11.skifinder"
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "plugins": [["expo-secure-store"], ["expo-local-authentication"]]
   }
 }

@@ -1,11 +1,21 @@
-import React, { useState } from "react";
-import { View, StyleSheet, Alert } from "react-native";
+import React, { useState, useEffect } from "react";
+import { View, StyleSheet, Alert, ActivityIndicator } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context"; // Correct import
-import { Button, Card, Input, Typography } from "../components";
+import {
+  Button,
+  Card,
+  Autocomplete,
+  Typography,
+  AutocompleteOption,
+  ChairliftSelector,
+  Dropdown,
+  DIFFICULTY_OPTIONS,
+} from "../components";
 import theme from "../components/theme";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { RootStackParamList } from "../navigation/AppNavigator";
-import { route as testRoute, route2 } from "./testRoute";
+import { fetchResortPOIs, poiToOption, POI } from "../services/poiService";
+import { findRoute, RouteRequest } from "../services/routeService";
 
 type RouteFinderScreenProps = NativeStackScreenProps<
   RootStackParamList,
@@ -16,31 +26,114 @@ const RouteFinderScreen: React.FC<RouteFinderScreenProps> = ({
   route,
   navigation,
 }) => {
-  const { resortName } = route.params;
+  const { resortId, resortName } = route.params;
 
   const [startLocation, setStartLocation] = useState("");
   const [destination, setDestination] = useState("");
+  const [startPOIId, setStartPOIId] = useState<number | null>(null);
+  const [endPOIId, setEndPOIId] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [pois, setPois] = useState<POI[]>([]);
+  const [poiOptions, setPoiOptions] = useState<AutocompleteOption[]>([]);
+  const [isLoadingPOIs, setIsLoadingPOIs] = useState(true);
+  const [avoidedLifts, setAvoidedLifts] = useState<number[]>([]);
+  const [maxTrailDifficulty, setMaxTrailDifficulty] = useState<string>(
+    DIFFICULTY_OPTIONS[2].value
+  );
 
-  const handleFindRoute = () => {
+  // Fetch POIs when component mounts
+  useEffect(() => {
+    const loadPOIs = async () => {
+      try {
+        setIsLoadingPOIs(true);
+        const fetchedPois = await fetchResortPOIs(resortId);
+        setPois(fetchedPois);
+        const options = fetchedPois.flatMap(poiToOption);
+        setPoiOptions(options);
+      } catch (error: any) {
+        console.error("Failed to load POIs:", error);
+        Alert.alert(
+          "Error Loading Locations",
+          "Failed to load resort locations. Please try again.",
+          [
+            { text: "Retry", onPress: loadPOIs },
+            { text: "Cancel", style: "cancel" },
+          ]
+        );
+      } finally {
+        setIsLoadingPOIs(false);
+      }
+    };
+
+    loadPOIs();
+  }, [resortId]);
+
+  const handleStartLocationSelect = (option: AutocompleteOption) => {
+    if (option.data) {
+      setStartPOIId(option.data.id);
+    }
+  };
+
+  const handleDestinationSelect = (option: AutocompleteOption) => {
+    if (option.data) {
+      setEndPOIId(option.data.id);
+    }
+  };
+
+  const handleFindRoute = async () => {
+    if (!startLocation || !destination) {
+      Alert.alert(
+        "Error",
+        "Please select both a start location and destination."
+      );
+      return;
+    }
+
+    if (!startPOIId || !endPOIId) {
+      Alert.alert("Error", "Please select locations from the suggestions.");
+      return;
+    }
+
     setIsLoading(true);
 
-    setTimeout(() => {
-      setIsLoading(false);
-      if (startLocation && destination) {
-        Alert.alert(
-          "Route Found!",
-          `Displaying the best route from ${startLocation} to ${destination}.`
-        );
-        navigation.navigate("RouteDisplay", { path: route2 });
+    try {
+      const routeRequest: RouteRequest = {
+        ski_area_id: resortId,
+        start_point_id: startPOIId,
+        end_point_id: endPOIId,
+        max_difficulty: maxTrailDifficulty as
+          | "green"
+          | "blue"
+          | "black"
+          | "blue_black"
+          | "double_black",
+        avoid_lifts: avoidedLifts,
+      };
+      console.log(routeRequest);
+
+      const routeSteps = await findRoute(routeRequest);
+
+      if (routeSteps.length > 0) {
+        navigation.navigate("RouteDisplay", { path: routeSteps });
       } else {
-        Alert.alert("Error", "Please enter a start and destination.");
+        Alert.alert(
+          "No Route Found",
+          "No route could be found between these locations. Please try different points."
+        );
       }
-    }, 1500);
+    } catch (error: any) {
+      console.error("Failed to find route:", error);
+      Alert.alert(
+        "Route Error",
+        error.message || "Failed to find route. Please try again."
+      );
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <SafeAreaView style={styles.safeArea} edges={["bottom", "left", "right"]}>
       <View style={styles.container}>
         <Typography level="h1" style={styles.title}>
           {resortName}
@@ -50,18 +143,51 @@ const RouteFinderScreen: React.FC<RouteFinderScreenProps> = ({
         </Typography>
 
         <Card>
-          <Input
-            placeholder="Current Location"
-            value={startLocation}
-            onChangeText={setStartLocation}
-            style={styles.input}
-          />
-          <Input
-            placeholder="Destination"
-            value={destination}
-            onChangeText={setDestination}
-          />
+          {isLoadingPOIs ? (
+            <View style={styles.loadingContainer}>
+              <ActivityIndicator size="small" color={theme.colors.primary} />
+              <Typography color="secondary" style={styles.loadingText}>
+                Loading locations...
+              </Typography>
+            </View>
+          ) : (
+            <>
+              <Autocomplete
+                placeholder="Current Location (start typing)"
+                value={startLocation}
+                onChangeText={setStartLocation}
+                options={poiOptions}
+                style={styles.input}
+                showAllOnFocus={true}
+                maxOptions={8}
+                onOptionSelect={handleStartLocationSelect}
+              />
+              <Autocomplete
+                placeholder="Destination (start typing)"
+                value={destination}
+                onChangeText={setDestination}
+                options={poiOptions}
+                showAllOnFocus={true}
+                maxOptions={8}
+                onOptionSelect={handleDestinationSelect}
+              />
+            </>
+          )}
         </Card>
+        <ChairliftSelector
+          resortId={resortId}
+          title="Avoid Chairlifts"
+          maxHeight={200}
+          onSelectionChange={setAvoidedLifts}
+          selectedLiftIds={avoidedLifts}
+        />
+        <Dropdown
+          options={DIFFICULTY_OPTIONS}
+          placeholder="Maximum Difficulty"
+          selectedValue={maxTrailDifficulty}
+          onSelect={setMaxTrailDifficulty}
+          title="Maximum Trail Difficulty"
+        />
 
         <Button
           title="Find Route"
@@ -83,7 +209,9 @@ const styles = StyleSheet.create({
   },
   container: {
     flex: 1,
-    padding: theme.spacing.lg,
+    paddingHorizontal: theme.spacing.lg,
+    paddingTop: theme.spacing.sm,
+    paddingBottom: theme.spacing.lg,
   },
   title: {
     marginBottom: theme.spacing.sm,
@@ -96,6 +224,15 @@ const styles = StyleSheet.create({
   },
   findButton: {
     marginTop: theme.spacing.lg,
+  },
+  loadingContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: theme.spacing.lg,
+  },
+  loadingText: {
+    marginLeft: theme.spacing.sm,
   },
 });
 

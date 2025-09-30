@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
-import { View, StyleSheet } from "react-native";
+import { View, StyleSheet, Alert, TouchableOpacity } from "react-native";
 import {
   SafeAreaView,
   useSafeAreaInsets,
@@ -8,6 +8,8 @@ import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import MapView, { Marker, Polyline } from "react-native-maps";
 import Slider from "@react-native-community/slider";
 import { MaterialIcons } from "@expo/vector-icons";
+import * as Location from "expo-location";
+import { isDevelopment } from "../config";
 
 import { RootStackParamList } from "../navigation/AppNavigator";
 import { Button, Card, Typography } from "../components";
@@ -59,6 +61,13 @@ const interpolate = (
   };
 };
 
+const getMidpoint = (start: Coordinate, end: Coordinate): Coordinate => {
+  return {
+    lat: (start.lat + end.lat) / 2,
+    lng: (start.lng + end.lng) / 2,
+  };
+};
+
 // --- Main Component ---
 type RouteDisplayScreenProps = NativeStackScreenProps<
   RootStackParamList,
@@ -79,6 +88,8 @@ const RouteDisplayScreen: React.FC<RouteDisplayScreenProps> = ({
   const [userHeading, setUserHeading] = useState(0);
   const [simulationProgress, setSimulationProgress] = useState(0);
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
+  const [locationSubscription, setLocationSubscription] =
+    useState<Location.LocationSubscription | null>(null);
 
   // Process the raw path to group runs and handle connectors
   const processedSteps = useMemo(() => {
@@ -280,6 +291,77 @@ const RouteDisplayScreen: React.FC<RouteDisplayScreenProps> = ({
     }
   }, [userHeading]);
 
+  // Location tracking for production
+  useEffect(() => {
+    if (!isDevelopment) {
+      const startLocationTracking = async () => {
+        try {
+          // Request permissions
+          const { status } = await Location.requestForegroundPermissionsAsync();
+          if (status !== "granted") {
+            Alert.alert(
+              "Location Permission Required",
+              "Please enable location access to track your position during the route.",
+              [{ text: "OK" }]
+            );
+            return;
+          }
+
+          // Start watching position
+          const subscription = await Location.watchPositionAsync(
+            {
+              accuracy: Location.Accuracy.BestForNavigation,
+              timeInterval: 1000, // Update every second
+              distanceInterval: 1, // Update every meter
+            },
+            (location) => {
+              const newLocation: Coordinate = {
+                lat: location.coords.latitude,
+                lng: location.coords.longitude,
+              };
+              setUserLocation(newLocation);
+
+              // Update heading if available
+              if (
+                location.coords.heading !== null &&
+                location.coords.heading !== undefined
+              ) {
+                setUserHeading(location.coords.heading);
+              }
+            }
+          );
+
+          setLocationSubscription(subscription);
+        } catch (error) {
+          console.error("Error starting location tracking:", error);
+          Alert.alert(
+            "Location Error",
+            "Unable to start location tracking. Using route start position.",
+            [{ text: "OK" }]
+          );
+        }
+      };
+
+      startLocationTracking();
+
+      // Cleanup function
+      return () => {
+        if (locationSubscription) {
+          locationSubscription.remove();
+        }
+      };
+    }
+  }, [isDevelopment]);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (locationSubscription) {
+        locationSubscription.remove();
+      }
+    };
+  }, [locationSubscription]);
+
   const currentStep = processedSteps[currentStepIndex];
   const nextNodeCoords = currentStep.end_coords;
   const distanceToNextNode = getDistance(userLocation, nextNodeCoords);
@@ -330,17 +412,6 @@ const RouteDisplayScreen: React.FC<RouteDisplayScreenProps> = ({
           zIndex={2}
         />
 
-        {/* Circle marker at the end of current step */}
-        <Marker
-          coordinate={{
-            latitude: processedSteps[currentStepIndex].end_coords.lat,
-            longitude: processedSteps[currentStepIndex].end_coords.lng,
-          }}
-          anchor={{ x: 0.5, y: 0.5 }}
-        >
-          <View style={styles.endPointCircle} />
-        </Marker>
-
         {/* User location marker */}
         <Marker
           coordinate={{
@@ -357,24 +428,89 @@ const RouteDisplayScreen: React.FC<RouteDisplayScreenProps> = ({
             style={styles.userArrow}
           />
         </Marker>
+
+        {/* Labels for all steps */}
+        {processedSteps.map((step, index) => {
+          const isCurrentStep = index === currentStepIndex;
+          const isLift = step.type === "lift";
+
+          // Position labels at midpoint for chairlifts, at start for runs
+          const labelPosition = isLift
+            ? getMidpoint(step.start_coords, step.end_coords)
+            : step.start_coords;
+
+          return (
+            <Marker
+              key={`label-${step.id}-${index}`}
+              coordinate={{
+                latitude: labelPosition.lat,
+                longitude: labelPosition.lng,
+              }}
+              anchor={{ x: 0.5, y: 0.5 }}
+            >
+              <View
+                style={[
+                  styles.stepLabel,
+                  isLift && !isCurrentStep && styles.liftLabel,
+                  isCurrentStep && styles.currentStepLabel,
+                ]}
+              >
+                <Typography
+                  style={[
+                    styles.labelText,
+                    isLift && !isCurrentStep && styles.liftLabelText,
+                    isCurrentStep && styles.currentStepLabelText,
+                  ]}
+                >
+                  {step.name}
+                </Typography>
+              </View>
+            </Marker>
+          );
+        })}
       </MapView>
 
       <View style={styles.overlayContainer}>
-        <Card
-          style={{
-            ...styles.topCard,
-            marginTop: insets.top + theme.spacing.sm,
-          }}
-        >
-          <Typography level="h2">{currentStep.name ?? "Connector"}</Typography>
-          <Typography color="secondary">
-            {`Step ${currentStepIndex + 1} of ${
-              processedSteps.length
-            } • About ${
-              Math.round(currentStep.estimated_time_minutes * 10) / 10
-            } min`}
-          </Typography>
-        </Card>
+        <View style={styles.topSection}>
+          <Card
+            style={{
+              ...styles.topCard,
+              marginTop: insets.top + theme.spacing.sm,
+            }}
+          >
+            <Typography level="h2">
+              {currentStep.name ?? "Connector"}
+            </Typography>
+            <Typography color="secondary">
+              {`Step ${currentStepIndex + 1} of ${
+                processedSteps.length
+              } • About ${
+                Math.round(currentStep.estimated_time_minutes * 10) / 10
+              } min`}
+            </Typography>
+          </Card>
+
+          {/* Back button positioned below the top card, aligned with card's left edge */}
+          <TouchableOpacity
+            onPress={() => {
+              Alert.alert(
+                "Exit Route",
+                "Are you sure you want to exit the current route?",
+                [
+                  { text: "Cancel", style: "cancel" },
+                  {
+                    text: "Exit",
+                    style: "destructive",
+                    onPress: () => navigation.pop(),
+                  },
+                ]
+              );
+            }}
+            style={styles.backButton}
+          >
+            <MaterialIcons name="arrow-back" size={24} color="white" />
+          </TouchableOpacity>
+        </View>
 
         <Card
           style={{
@@ -400,19 +536,21 @@ const RouteDisplayScreen: React.FC<RouteDisplayScreenProps> = ({
             onPress={handleNext}
           />
 
-          <View style={styles.devPanel}>
-            <Typography>Simulate Location</Typography>
-            <Slider
-              style={{ flex: 1, height: 40 }}
-              minimumValue={0}
-              maximumValue={1}
-              value={simulationProgress}
-              onValueChange={handleSimulationScrub}
-              minimumTrackTintColor={theme.colors.primary}
-              maximumTrackTintColor={theme.colors.border}
-              thumbTintColor={theme.colors.primary}
-            />
-          </View>
+          {isDevelopment && (
+            <View style={styles.devPanel}>
+              <Typography>Simulate Location (Dev Mode)</Typography>
+              <Slider
+                style={{ flex: 1, height: 40 }}
+                minimumValue={0}
+                maximumValue={1}
+                value={simulationProgress}
+                onValueChange={handleSimulationScrub}
+                minimumTrackTintColor={theme.colors.primary}
+                maximumTrackTintColor={theme.colors.border}
+                thumbTintColor={theme.colors.primary}
+              />
+            </View>
+          )}
         </Card>
       </View>
     </View>
@@ -441,6 +579,26 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: theme.colors.border,
   },
+  locationInfo: {
+    marginTop: theme.spacing.lg,
+    paddingTop: theme.spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: theme.colors.border,
+  },
+  topSection: {
+    width: "100%",
+  },
+  backButton: {
+    marginTop: theme.spacing.sm,
+    marginLeft: 0, // Remove left margin since we'll align with card
+    alignSelf: "flex-start", // Align to left edge of container
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
   endPointCircle: {
     width: 20,
     height: 20,
@@ -453,6 +611,40 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.3,
     shadowRadius: 3,
     elevation: 5,
+  },
+  stepLabel: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "white",
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: theme.colors.primary,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3,
+    elevation: 5,
+  },
+  currentStepLabel: {
+    backgroundColor: "#FF6B35",
+    borderColor: "white",
+  },
+  liftLabel: {
+    backgroundColor: "#E8F4FD",
+    borderColor: "#2196F3",
+  },
+  labelText: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: theme.colors.primary,
+  },
+  currentStepLabelText: {
+    color: "white",
+  },
+  liftLabelText: {
+    color: "#2196F3",
   },
 });
 
